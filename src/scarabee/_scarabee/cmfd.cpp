@@ -858,6 +858,40 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
   xt::xtensor<double, 2> D_transp_corr_new =
       xt::zeros<double>({ng_, nx_surfs_ + ny_surfs_});
 
+  std::vector<std::vector<std::pair<double, double>>> D_surf_coefs(
+    ng_, std::vector<std::pair<double, double>>(nx_surfs_ + ny_surfs_));
+
+  for (std::size_t g = 0; g < ng_; ++g) {
+    for (std::size_t j = 0; j < ny_; ++j) {
+      for (std::size_t i = 0; i < nx_; ++i) {
+
+        // XN boundary
+        if (i == 0) {
+          const std::size_t xnsurf = get_x_neg_surf(i, j);
+          D_surf_coefs[g][xnsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::XN, moc);
+        }
+
+        // Use XP boundary on every cell
+        {
+          const std::size_t xpsurf = get_x_pos_surf(i, j);
+          D_surf_coefs[g][xpsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::XP, moc);
+        }
+
+        // YN boundary
+        if (j == 0) {
+          const std::size_t ynsurf = get_y_neg_surf(i, j);
+          D_surf_coefs[g][ynsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::YN, moc);
+        }
+
+        // Use YP boundary on every cell
+        {
+          const std::size_t ypsurf = get_y_pos_surf(i, j);
+          D_surf_coefs[g][ypsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::YP, moc);
+        }
+      }
+    }
+  }
+
   // Loop over all cells and groups, cell index changes fastest
   for (std::size_t g = 0; g < ng_; ++g) {
     for (std::size_t l = 0; l < nx_ * ny_; l++) {
@@ -874,14 +908,11 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
       const auto ynsurf = get_y_neg_surf(i, j);
 
       // Get surface diffusion coefficients for Cell i,j
-      auto [Dxp, Dnl_xp] =
-          calc_surf_diffusion_coeffs(i, j, g, CMFD::TileSurf::XP, moc);
-      auto [Dyp, Dnl_yp] =
-          calc_surf_diffusion_coeffs(i, j, g, CMFD::TileSurf::YP, moc);
-      auto [Dxn, Dnl_xn] =
-          calc_surf_diffusion_coeffs(i, j, g, CMFD::TileSurf::XN, moc);
-      auto [Dyn, Dnl_yn] =
-          calc_surf_diffusion_coeffs(i, j, g, CMFD::TileSurf::YN, moc);
+      auto [Dxp, Dnl_xp] = D_surf_coefs[g][xpsurf];
+      auto [Dxn, Dnl_xn] = D_surf_coefs[g][xnsurf];
+      auto [Dyp, Dnl_yp] = D_surf_coefs[g][ypsurf];
+      auto [Dyn, Dnl_yn] = D_surf_coefs[g][ynsurf];
+
 
       if (Dnl_xp > Dxp || Dnl_xn > Dxn || Dnl_yp > Dyp || Dnl_yn > Dyn) {
         auto mssg =
@@ -947,7 +978,7 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
                     g * tot_cells + tile_to_indx(i, ny_ - 1)) +=
             (Dnl_yn - Dyn) * invs_dy;
       }
-      if (j == nx_ - 1 && moc.y_max_bc() == BoundaryCondition::Periodic) {
+      if (j == ny_ - 1 && moc.y_max_bc() == BoundaryCondition::Periodic) {
         M_.coeffRef(g * tot_cells + l, g * tot_cells + tile_to_indx(i, 0)) +=
             (-Dyp - Dnl_yp) * invs_dy;
       }
@@ -975,13 +1006,13 @@ void CMFD::create_source_matrix() {
 
   // Loop over all cells and groups, cell index changes fastest
   for (std::size_t g = 0; g < ng_; g++) {
-    for (std::size_t l = 0; l < nx_ * ny_; l++) {
+    for (std::size_t l = 0; l < tot_cells; l++) {
       auto [i, j] = indx_to_tile(l);
       const double chi_g = xs_(i, j)->chi(g);
       // Loop over all groups again for fission source
       for (std::size_t gg = 0; gg < ng_; gg++) {
         const double vEf_gg = xs_(i, j)->vEf(gg);
-        QM_.coeffRef(g * tot_cells + l, gg * tot_cells + l) = chi_g * vEf_gg;
+        QM_.coeffRef(g * tot_cells + l, gg * tot_cells + l) += chi_g * vEf_gg;
       }
     }
   }
