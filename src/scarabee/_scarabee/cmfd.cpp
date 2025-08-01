@@ -858,35 +858,49 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
   xt::xtensor<double, 2> D_transp_corr_new =
       xt::zeros<double>({ng_, nx_surfs_ + ny_surfs_});
 
-  std::vector<std::vector<std::pair<double, double>>> D_surf_coefs(
-    ng_, std::vector<std::pair<double, double>>(nx_surfs_ + ny_surfs_));
+  // Precompute new surface diffusion coefficients 
+  xt::xtensor<double, 2> D_surf_coefs_new = 
+      xt::zeros<double>({ng_, nx_surfs_ + ny_surfs_});
 
   for (std::size_t g = 0; g < ng_; ++g) {
+#pragma omp parallel for 
     for (std::size_t j = 0; j < ny_; ++j) {
-      for (std::size_t i = 0; i < nx_; ++i) {
+      for (std::size_t i = 0; i < nx_; ++i) { 
 
         // XN boundary
         if (i == 0) {
           const std::size_t xnsurf = get_x_neg_surf(i, j);
-          D_surf_coefs[g][xnsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::XN, moc);
+          auto [Dxn, Dnl_xn] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::XN, moc);
+          Dnl_xn = (1 - damping_) * D_transp_corr_(g, xnsurf) + damping_ * Dnl_xn;
+          D_transp_corr_new(g, xnsurf) = Dnl_xn;
+          D_surf_coefs_new(g, xnsurf) = Dxn;
         }
 
         // Use XP boundary on every cell
         {
           const std::size_t xpsurf = get_x_pos_surf(i, j);
-          D_surf_coefs[g][xpsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::XP, moc);
+          auto [Dxp, Dnl_xp] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::XP, moc);
+          Dnl_xp = (1 - damping_) * D_transp_corr_(g, xpsurf) + damping_ * Dnl_xp;
+          D_transp_corr_new(g, xpsurf) = Dnl_xp;
+          D_surf_coefs_new(g, xpsurf) = Dxp;
         }
 
         // YN boundary
         if (j == 0) {
           const std::size_t ynsurf = get_y_neg_surf(i, j);
-          D_surf_coefs[g][ynsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::YN, moc);
+          auto [Dyn, Dnl_yn]  = calc_surf_diffusion_coeffs(i, j, g, TileSurf::YN, moc);
+          Dnl_yn = (1 - damping_) * D_transp_corr_(g, ynsurf) + damping_ * Dnl_yn;
+          D_transp_corr_new(g, ynsurf) = Dnl_yn;
+          D_surf_coefs_new(g, ynsurf) = Dyn;
         }
 
         // Use YP boundary on every cell
         {
           const std::size_t ypsurf = get_y_pos_surf(i, j);
-          D_surf_coefs[g][ypsurf] = calc_surf_diffusion_coeffs(i, j, g, TileSurf::YP, moc);
+          auto [Dyp, Dnl_yp]  = calc_surf_diffusion_coeffs(i, j, g, TileSurf::YP, moc);
+          Dnl_yp = (1 - damping_) * D_transp_corr_(g, ypsurf) + damping_ * Dnl_yp;
+          D_transp_corr_new(g, ypsurf) = Dnl_yp;
+          D_surf_coefs_new(g, ypsurf) = Dyp;
         }
       }
     }
@@ -907,31 +921,22 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
       const auto ypsurf = get_y_pos_surf(i, j);
       const auto ynsurf = get_y_neg_surf(i, j);
 
-      // Get surface diffusion coefficients for Cell i,j
-      auto [Dxp, Dnl_xp] = D_surf_coefs[g][xpsurf];
-      auto [Dxn, Dnl_xn] = D_surf_coefs[g][xnsurf];
-      auto [Dyp, Dnl_yp] = D_surf_coefs[g][ypsurf];
-      auto [Dyn, Dnl_yn] = D_surf_coefs[g][ynsurf];
-
-
+      // Get precomputed diffusion coefficients
+      const double Dxn = D_surf_coefs_new(g, xnsurf);
+      const double Dnl_xn = D_transp_corr_new(g, xnsurf);
+      const double Dxp = D_surf_coefs_new(g, xpsurf);
+      const double Dnl_xp = D_transp_corr_new(g, xpsurf);
+      const double Dyn = D_surf_coefs_new(g, ynsurf);
+      const double Dnl_yn = D_transp_corr_new(g, ynsurf);
+      const double Dyp = D_surf_coefs_new(g, ypsurf);
+      const double Dnl_yp = D_transp_corr_new(g, ypsurf);
+      
       if (Dnl_xp > Dxp || Dnl_xn > Dxn || Dnl_yp > Dyp || Dnl_yn > Dyn) {
         auto mssg =
             "At least one transport corrected diffusion coefficient is greater "
             "than its non-corrected counterpart";
         spdlog::debug(mssg);
       }
-
-      // Calculate n+1 diffusion coefficients from n-1 and n+1/2
-      Dnl_xp = (1 - damping_) * D_transp_corr_(g, xpsurf) + damping_ * Dnl_xp;
-      Dnl_xn = (1 - damping_) * D_transp_corr_(g, xnsurf) + damping_ * Dnl_xn;
-      Dnl_yp = (1 - damping_) * D_transp_corr_(g, ypsurf) + damping_ * Dnl_yp;
-      Dnl_yn = (1 - damping_) * D_transp_corr_(g, ynsurf) + damping_ * Dnl_yn;
-
-      // Store the current CMFD iteration's diffusion coefficients
-      D_transp_corr_new(g, xpsurf) = Dnl_xp;
-      D_transp_corr_new(g, xnsurf) = Dnl_xn;
-      D_transp_corr_new(g, ypsurf) = Dnl_yp;
-      D_transp_corr_new(g, ynsurf) = Dnl_yn;
 
       // Streaming to adjacent X cells
       if (i != 0) {
