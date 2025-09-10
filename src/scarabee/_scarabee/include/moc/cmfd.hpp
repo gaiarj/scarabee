@@ -154,6 +154,7 @@ class CMFD {
   std::vector<std::size_t> moc_to_cmfd_group_map_;
   std::vector<std::pair<std::size_t, std::size_t>> group_condensation_;
   std::size_t nx_, ny_, ng_;
+  std::size_t tot_cells_;
   std::size_t nx_surfs_, ny_surfs_;
 
   bool flux_limiting_ = true;

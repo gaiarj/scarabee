@@ -592,9 +592,9 @@ void MOCDriver::sweep(xt::xtensor<double, 3>& sflux,
           const auto surf_indx = track.begin()->entry_cmfd_surface();
           double cmfd_flx = 0.;
           for (std::size_t p = 0; p < n_pol_angles_; p++) {
-            cmfd_flx += tw * polar_quad_.wsin()[p] * angflux[p];
+            cmfd_flx += polar_quad_.wsin()[p] * angflux[p];
           }
-          cmfd_->tally_current(cmfd_flx, u_forw, G, surf_indx);
+          cmfd_->tally_current(tw * cmfd_flx, u_forw, G, surf_indx);
         }
 
         // Follow track in forward direction
@@ -612,12 +612,12 @@ void MOCDriver::sweep(xt::xtensor<double, 3>& sflux,
             const double delta_flx = (angflux[p] - (Q / Et)) * exp_m1;
             angflux[p] -= delta_flx;
             delta_sum += polar_quad_.wsin()[p] * delta_flx;
-            if (cmfd_surf) cmfd_flx += tw * polar_quad_.wsin()[p] * angflux[p];
+            if (cmfd_surf) cmfd_flx += polar_quad_.wsin()[p] * angflux[p];
           }  // For all polar angles
 
           if (cmfd_surf &&
               cmfd_->moc_iteration() >= cmfd_->skip_moc_iterations()) {
-            cmfd_->tally_current(cmfd_flx, u_forw, G, cmfd_surf);
+            cmfd_->tally_current(tw * cmfd_flx, u_forw, G, cmfd_surf);
           }
 
           sflux(g, i, 0) += tw * delta_sum;
@@ -644,9 +644,9 @@ void MOCDriver::sweep(xt::xtensor<double, 3>& sflux,
           auto surf_indx = track.rbegin()->exit_cmfd_surface();
           double cmfd_flx = 0.;
           for (std::size_t p = 0; p < n_pol_angles_; p++) {
-            cmfd_flx += tw * polar_quad_.wsin()[p] * angflux[p];
+            cmfd_flx += polar_quad_.wsin()[p] * angflux[p];
           }
-          cmfd_->tally_current(cmfd_flx, u_back, G, surf_indx);
+          cmfd_->tally_current(tw * cmfd_flx, u_back, G, surf_indx);
         }
 
         // Iterate over segments in backwards direction
@@ -665,11 +665,11 @@ void MOCDriver::sweep(xt::xtensor<double, 3>& sflux,
             const double delta_flx = (angflux[p] - (Q / Et)) * exp_m1;
             angflux[p] -= delta_flx;
             delta_sum += polar_quad_.wsin()[p] * delta_flx;
-            if (cmfd_surf) cmfd_flx += tw * polar_quad_.wsin()[p] * angflux[p];
+            if (cmfd_surf) cmfd_flx += polar_quad_.wsin()[p] * angflux[p];
           }  // For all polar angles
           if (cmfd_surf &&
               cmfd_->moc_iteration() >= cmfd_->skip_moc_iterations()) {
-            cmfd_->tally_current(cmfd_flx, u_back, G, cmfd_surf);
+            cmfd_->tally_current(tw * cmfd_flx, u_back, G, cmfd_surf);
           }
 
           sflux(g, i, 0) += tw * delta_sum;

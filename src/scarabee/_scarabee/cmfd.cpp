@@ -85,8 +85,10 @@ CMFD::CMFD(const std::vector<double>& dx, const std::vector<double>& dy,
   nx_surfs_ = x_bounds_.size() * (y_bounds_.size() - 1);
   ny_surfs_ = y_bounds_.size() * (x_bounds_.size() - 1);
 
+  tot_cells_ = nx_ * ny_;
+
   // Allocate temp_fsrs_
-  temp_fsrs_.resize(nx_ * ny_);
+  temp_fsrs_.resize(tot_cells_);
 
   // Check group condensation scheme
   if (group_condensation_.size() == 0) {
@@ -131,7 +133,7 @@ CMFD::CMFD(const std::vector<double>& dx, const std::vector<double>& dy,
   xs_.fill(nullptr);
 
   // Allocate cell volume array
-  volumes_.resize(nx_ * ny_);
+  volumes_.resize(tot_cells_);
   for (std::size_t i = 0; i < nx_; i++) {
     for (std::size_t j = 0; j < ny_; j++) {
       // Store CMFD cell volume
@@ -141,15 +143,15 @@ CMFD::CMFD(const std::vector<double>& dx, const std::vector<double>& dy,
   }
 
   // Set CMFD fluxes to 1
-  flux_cmfd_.resize(ng_ * nx_ * ny_);
+  flux_cmfd_.resize(ng_ * tot_cells_);
   flux_cmfd_.setOnes();
 
   // Allocate flux update ratio array
-  update_ratios_.resize(ng_ * nx_ * ny_);
+  update_ratios_.resize(ng_ * tot_cells_);
   update_ratios_.setOnes();
 
   // Allocate external source array
-  extern_src_.resize(ng_ * nx_ * ny_);
+  extern_src_.resize(ng_ * tot_cells_);
   extern_src_.setZero();
 
   // Allocate the flux, Et, and D_transp_corr arrays
@@ -160,8 +162,8 @@ CMFD::CMFD(const std::vector<double>& dx, const std::vector<double>& dy,
 
 std::optional<std::array<std::size_t, 2>> CMFD::get_tile(
     const Vector& r, const Direction& u) const {
-  for (std::size_t i = 0; i < nx(); i++) {
-    for (std::size_t j = 0; j < ny(); j++) {
+  for (std::size_t i = 0; i < nx_; i++) {
+    for (std::size_t j = 0; j < ny_; j++) {
       // Get the surfaces that make up our tile
       const auto& xl = x_bounds_[i];
       const auto& xh = x_bounds_[i + 1];
@@ -284,7 +286,7 @@ void CMFD::insert_fsr(std::size_t tile_indx, std::size_t fsr) {
 }
 
 void CMFD::pack_fsr_lists() {
-  fsrs_.resize(nx_ * ny_, std::vector<std::size_t>());
+  fsrs_.resize(tot_cells_, std::vector<std::size_t>());
 
   for (std::size_t i = 0; i < fsrs_.size(); i++) {
     fsrs_[i].insert(fsrs_[i].begin(), temp_fsrs_[i].begin(),
@@ -325,7 +327,7 @@ const double& CMFD::flux(const std::size_t i, const std::size_t j,
 
   const std::size_t cell_index = tile_to_indx(i, j);
 
-  return flux_cmfd_(g * nx_ * ny_ + cell_index);
+  return flux_cmfd_(g * tot_cells_ + cell_index);
 }
 
 const double& CMFD::current(const std::size_t G,
@@ -486,15 +488,14 @@ void CMFD::compute_homogenized_xs_and_flux(const MOCDriver& moc) {
 void CMFD::homogenize_ext_src(const MOCDriver& moc) {
   // Reset external source array
   extern_src_.setZero();
-  const std::size_t tot_cells = nx_ * ny_;
   // Loop over all cells
-  for (std::size_t l = 0; l < tot_cells; l++) {
+  for (std::size_t l = 0; l < tot_cells_; l++) {
     const double invs_V = 1. / volumes_[l];
     // Loop over MOC groups
     for (std::size_t g = 0; g < moc_to_cmfd_group_map_.size(); g++) {
       // Loop over FSRs in cell l
       for (auto fsr : fsrs_[l]) {
-        extern_src_[moc_to_cmfd_group_map_[g] * tot_cells + l] +=
+        extern_src_[moc_to_cmfd_group_map_[g] * tot_cells_ + l] +=
             invs_V * moc.volume(fsr) * moc.extern_src(fsr, g);
       }
     }
@@ -851,9 +852,8 @@ std::pair<double, double> CMFD::calc_surf_diffusion_coeffs(
 }
 
 void CMFD::create_loss_matrix(const MOCDriver& moc) {
-  const std::size_t tot_cells = nx_ * ny_;
-  M_.resize(ng_ * tot_cells, ng_ * tot_cells);
-  M_.reserve(Eigen::VectorXi::Constant(ng_ * tot_cells, 5));
+  M_.resize(ng_ * tot_cells_, ng_ * tot_cells_);
+  M_.reserve(Eigen::VectorXi::Constant(ng_ * tot_cells_, 5));
   // Initialize array to store n+1 diffusion coefficients
   xt::xtensor<double, 2> D_transp_corr_new =
       xt::zeros<double>({ng_, nx_surfs_ + ny_surfs_});
@@ -862,10 +862,10 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
   xt::xtensor<double, 2> D_surf_coefs_new = 
       xt::zeros<double>({ng_, nx_surfs_ + ny_surfs_});
 
-  for (std::size_t g = 0; g < ng_; ++g) {
+  for (std::size_t g = 0; g < ng_; g++) {
 #pragma omp parallel for 
-    for (std::size_t j = 0; j < ny_; ++j) {
-      for (std::size_t i = 0; i < nx_; ++i) { 
+    for (std::size_t j = 0; j < ny_; j++) {
+      for (std::size_t i = 0; i < nx_; i++) { 
 
         // XN boundary
         if (i == 0) {
@@ -907,8 +907,8 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
   }
 
   // Loop over all cells and groups, cell index changes fastest
-  for (std::size_t g = 0; g < ng_; ++g) {
-    for (std::size_t l = 0; l < nx_ * ny_; l++) {
+  for (std::size_t g = 0; g < ng_; g++) {
+    for (std::size_t l = 0; l < tot_cells_; l++) {
       const auto [i, j] = indx_to_tile(l);
       const double dx = dx_[i];
       const double dy = dy_[j];
@@ -940,61 +940,61 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
 
       // Streaming to adjacent X cells
       if (i != 0) {
-        M_.coeffRef(g * tot_cells + l,
-                    g * tot_cells + tile_to_indx(i - 1, j)) +=
+        M_.coeffRef(g * tot_cells_ + l,
+                    g * tot_cells_ + tile_to_indx(i - 1, j)) +=
             (Dnl_xn - Dxn) * invs_dx;
       }
       if (i != nx_ - 1) {
-        M_.coeffRef(g * tot_cells + l,
-                    g * tot_cells + tile_to_indx(i + 1, j)) +=
+        M_.coeffRef(g * tot_cells_ + l,
+                    g * tot_cells_ + tile_to_indx(i + 1, j)) +=
             (-Dxp - Dnl_xp) * invs_dx;
       }
-      M_.coeffRef(g * tot_cells + l, g * tot_cells + l) +=
+      M_.coeffRef(g * tot_cells_ + l, g * tot_cells_ + l) +=
           (Dxn + Dxp + Dnl_xn - Dnl_xp) * invs_dx;
 
       // Streaming to adjacent Y cells
       if (j != 0) {
-        M_.coeffRef(g * tot_cells + l,
-                    g * tot_cells + tile_to_indx(i, j - 1)) +=
+        M_.coeffRef(g * tot_cells_ + l,
+                    g * tot_cells_ + tile_to_indx(i, j - 1)) +=
             (Dnl_yn - Dyn) * invs_dy;
       }
       if (j != ny_ - 1) {
-        M_.coeffRef(g * tot_cells + l,
-                    g * tot_cells + tile_to_indx(i, j + 1)) +=
+        M_.coeffRef(g * tot_cells_ + l,
+                    g * tot_cells_ + tile_to_indx(i, j + 1)) +=
             (-Dyp - Dnl_yp) * invs_dy;
       }
-      M_.coeffRef(g * tot_cells + l, g * tot_cells + l) +=
+      M_.coeffRef(g * tot_cells_ + l, g * tot_cells_ + l) +=
           (Dyn + Dyp + Dnl_yn - Dnl_yp) * invs_dy;
 
       // Handle periodic BC
       // X direction
       if (i == 0 && moc.x_min_bc() == BoundaryCondition::Periodic) {
-        M_.coeffRef(g * tot_cells + l,
-                    g * tot_cells + tile_to_indx(nx_ - 1, j)) +=
+        M_.coeffRef(g * tot_cells_ + l,
+                    g * tot_cells_ + tile_to_indx(nx_ - 1, j)) +=
             (Dnl_xn - Dxn) * invs_dx;
       }
       if (i == nx_ - 1 && moc.x_max_bc() == BoundaryCondition::Periodic) {
-        M_.coeffRef(g * tot_cells + l, g * tot_cells + tile_to_indx(0, j)) +=
+        M_.coeffRef(g * tot_cells_ + l, g * tot_cells_ + tile_to_indx(0, j)) +=
             (-Dxp - Dnl_xp) * invs_dx;
       }
       // Y direction
       if (j == 0 && moc.y_min_bc() == BoundaryCondition::Periodic) {
-        M_.coeffRef(g * tot_cells + l,
-                    g * tot_cells + tile_to_indx(i, ny_ - 1)) +=
+        M_.coeffRef(g * tot_cells_ + l,
+                    g * tot_cells_ + tile_to_indx(i, ny_ - 1)) +=
             (Dnl_yn - Dyn) * invs_dy;
       }
       if (j == ny_ - 1 && moc.y_max_bc() == BoundaryCondition::Periodic) {
-        M_.coeffRef(g * tot_cells + l, g * tot_cells + tile_to_indx(i, 0)) +=
+        M_.coeffRef(g * tot_cells_ + l, g * tot_cells_ + tile_to_indx(i, 0)) +=
             (-Dyp - Dnl_yp) * invs_dy;
       }
 
       // Add removal xs along diagonal
-      M_.coeffRef(g * tot_cells + l, g * tot_cells + l) += xs_(i, j)->Er(g);
+      M_.coeffRef(g * tot_cells_ + l, g * tot_cells_ + l) += xs_(i, j)->Er(g);
 
       // Remove scattering sources
-      for (std::size_t gg = 0; gg < ng_; ++gg) {
+      for (std::size_t gg = 0; gg < ng_; gg++) {
         if (gg != g) {
-          M_.coeffRef(g * tot_cells + l, gg * tot_cells + l) -=
+          M_.coeffRef(g * tot_cells_ + l, gg * tot_cells_ + l) -=
               xs_(i, j)->Es(gg, g);
         }
       }
@@ -1005,19 +1005,18 @@ void CMFD::create_loss_matrix(const MOCDriver& moc) {
 }
 
 void CMFD::create_source_matrix() {
-  const std::size_t tot_cells = nx_ * ny_;
-  QM_.resize(ng_ * tot_cells, ng_ * tot_cells);
-  QM_.reserve(Eigen::VectorX<std::size_t>::Constant(ng_ * tot_cells, ng_));
+  QM_.resize(ng_ * tot_cells_, ng_ * tot_cells_);
+  QM_.reserve(Eigen::VectorX<std::size_t>::Constant(ng_ * tot_cells_, ng_));
 
   // Loop over all cells and groups, cell index changes fastest
   for (std::size_t g = 0; g < ng_; g++) {
-    for (std::size_t l = 0; l < tot_cells; l++) {
+    for (std::size_t l = 0; l < tot_cells_; l++) {
       auto [i, j] = indx_to_tile(l);
       const double chi_g = xs_(i, j)->chi(g);
       // Loop over all groups again for fission source
       for (std::size_t gg = 0; gg < ng_; gg++) {
         const double vEf_gg = xs_(i, j)->vEf(gg);
-        QM_.coeffRef(g * tot_cells + l, gg * tot_cells + l) += chi_g * vEf_gg;
+        QM_.coeffRef(g * tot_cells_ + l, gg * tot_cells_ + l) += chi_g * vEf_gg;
       }
     }
   }
@@ -1027,12 +1026,12 @@ void CMFD::create_source_matrix() {
 void CMFD::power_iteration(double keff) {
   // Power Iteration to solve for Keff
   // Initialize flux and source vectors
-  Eigen::VectorXd new_flux(ng_ * nx_ * ny_);
-  Eigen::VectorXd Q(ng_ * nx_ * ny_);
+  Eigen::VectorXd new_flux(ng_ * tot_cells_);
+  Eigen::VectorXd Q(ng_ * tot_cells_);
 
   // Initialize a vector for computing keff faster
-  Eigen::VectorXd VvEf(ng_ * nx_ * ny_);
-  for (std::size_t l = 0; l < nx_ * ny_; l++) {
+  Eigen::VectorXd VvEf(ng_ * tot_cells_);
+  for (std::size_t l = 0; l < tot_cells_; l++) {
     auto [i, j] = indx_to_tile(l);
     for (std::size_t g = 0; g < ng_; g++) {
       double vEf = xs_(i, j)->vEf(g);
@@ -1079,7 +1078,7 @@ void CMFD::power_iteration(double keff) {
 
     // Find the max flux error
     flux_diff = 0.;
-    for (std::size_t i = 0; i < ng_ * nx_ * ny_; i++) {
+    for (std::size_t i = 0; i < ng_ * tot_cells_; i++) {
       double flux_diff_i = std::abs(new_flux(i) - flux_cmfd_(i)) / new_flux(i);
       if (flux_diff_i > flux_diff) flux_diff = flux_diff_i;
     }
@@ -1093,7 +1092,7 @@ void CMFD::fixed_source_solve() {
   // Subtract fission source from loss matrix
   Eigen::SparseMatrix<double> L = M_ - QM_;
 
-  Eigen::VectorXd new_flux(ng_ * nx_ * ny_);
+  Eigen::VectorXd new_flux(ng_ * tot_cells_);
 
   // Create a solver for the problem
   Eigen::BiCGSTAB<Eigen::SparseMatrix<double>> solver;
@@ -1121,7 +1120,7 @@ void CMFD::fixed_source_solve() {
 
 void CMFD::update_moc_fluxes(MOCDriver& moc) {
   // Update MOC FSR scalar fluxes
-  const std::size_t tot_cells = ny_ * nx_;
+  const std::size_t tot_cells_ = ny_ * nx_;
   bool flux_update_warning = false;
 
   // Normalize homogenized moc flux and cmfd flux
@@ -1131,9 +1130,9 @@ void CMFD::update_moc_fluxes(MOCDriver& moc) {
   // Precompute update ratio in each CMFD cell
   std::size_t i = 0;
   std::size_t j = 0;
-  for (std::size_t l = 0; l < tot_cells; l++) {
+  for (std::size_t l = 0; l < tot_cells_; l++) {
     for (std::size_t G = 0; G < ng_; G++) {
-      const std::size_t linear_indx = G * tot_cells + l;
+      const std::size_t linear_indx = G * tot_cells_ + l;
       const double invs_flx = 1. / flux_(G, i, j);
       double ratio = flux_cmfd_(linear_indx) * invs_flx;
       // Don't warn on first moc iteration or if ratio is exactly 0.0
@@ -1182,9 +1181,9 @@ void CMFD::update_moc_fluxes(MOCDriver& moc) {
     const std::size_t G = moc_to_cmfd_group_map_[g];
 
     // Loop over each FSR in CMFD cell i,j
-    for (std::size_t l = 0; l < tot_cells; l++) {
+    for (std::size_t l = 0; l < tot_cells_; l++) {
       const auto& fsrs = fsrs_[l];
-      const std::size_t linear_indx = G * tot_cells + l;
+      const std::size_t linear_indx = G * tot_cells_ + l;
       const double& flx_ratio = update_ratios_(linear_indx);
 
       // Update scalar flux in each MOC FSR
@@ -1205,7 +1204,7 @@ void CMFD::update_moc_fluxes(MOCDriver& moc) {
       std::size_t exit_cell = track.exit_cmfd_cell();
       for (std::size_t g = 0; g < moc_to_cmfd_group_map_.size(); g++) {
         const std::size_t G = moc_to_cmfd_group_map_[g];
-        const std::size_t g_indx = G * tot_cells;
+        const std::size_t g_indx = G * tot_cells_;
         xt::view(track.entry_flux(), g, xt::all()) *=
             update_ratios_(g_indx + entry_cell);
         xt::view(track.exit_flux(), g, xt::all()) *=
